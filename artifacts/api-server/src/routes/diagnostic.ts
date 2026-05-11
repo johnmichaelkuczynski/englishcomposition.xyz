@@ -78,13 +78,13 @@ router.post("/diagnostic/run", async (req: Request, res: Response) => {
       await db.select({ id: canvasSessionsTable.id }).from(canvasSessionsTable).limit(1);
       return "students, submissions, drafts, canvas_sessions all queryable";
     }),
-    await run("Curriculum: 13 modules loaded, 800 points total", "system", async () => {
-      if (modules.length !== 13)
-        throw new Error(`expected 13 modules, got ${modules.length}`);
+    await run("Curriculum: 14 modules loaded, 850 points total", "system", async () => {
+      if (modules.length !== 14)
+        throw new Error(`expected 14 modules, got ${modules.length}`);
       const total = modules.reduce((s, m) => s + m.points, 0);
-      if (total !== 800)
-        throw new Error(`expected 800 total points, got ${total}`);
-      // Sequential numbering 1..13
+      if (total !== 850)
+        throw new Error(`expected 850 total points, got ${total}`);
+      // Sequential numbering 1..14
       for (let i = 0; i < modules.length; i++) {
         if (modules[i].number !== i + 1)
           throw new Error(`module ${i} has number ${modules[i].number}`);
