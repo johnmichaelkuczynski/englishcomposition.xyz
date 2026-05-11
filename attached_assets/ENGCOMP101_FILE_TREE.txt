@@ -1,0 +1,689 @@
+================================================================================
+       ENGLISH COMPOSITION 101 - COMPLETE PROJECT FILE TREE & ARCHITECTURE
+       Multi-Artifact pnpm Monorepo with AI Tutor, Integrity Monitoring,
+       and Sequential Module Gating
+================================================================================
+
+
+================================================================================
+TOP-LEVEL FOLDER STRUCTURE
+================================================================================
+
+eng-comp-101/                        (pnpm monorepo root)
+|
++-- artifacts/                       INDIVIDUAL DEPLOYABLE PRODUCTS
+|   |
+|   +-- phil-101/                    FRONTEND (React + Vite + TypeScript)
+|   |                                Student-facing course web app
+|   |
+|   +-- api-server/                  BACKEND (Express + Node.js)
+|   |                                REST + SSE API behind /api
+|   |
+|   +-- mockup-sandbox/              DESIGN SCAFFOLD (Vite preview server)
+|                                    Iframe-mounted component previews on Canvas
+|
++-- lib/                             SHARED WORKSPACE PACKAGES
+|   |
+|   +-- api-spec/                    HAND-WRITTEN OpenAPI 3.x source of truth
+|   +-- api-zod/                     CODEGEN Zod schemas (Orval)
+|   +-- api-client-react/            CODEGEN React Query hooks (Orval)
+|   +-- db/                          Drizzle ORM schemas + Postgres client
+|   +-- integrations-anthropic-ai/   Anthropic SDK wrapper + batch utilities
+|
++-- attached_assets/                 USER-UPLOADED REFERENCE DOCS
++-- pnpm-workspace.yaml              Workspace member declaration
++-- replit.md                        Project notes & user preferences
+
+NOTE: Each artifact has its own `.replit-artifact/artifact.toml` describing
+the service name, preview path, port, and dev/build/serve commands. Workflows
+are auto-created from those manifests.
+
+
+================================================================================
+ARTIFACT 1: artifacts/phil-101/  - FRONTEND (React + Vite + TypeScript)
+================================================================================
+
+artifacts/phil-101/
+|
++-- index.html                  Vite entry HTML. <title>English Composition 101</title>.
+|                               Mounts /src/main.tsx as a module.
+|
++-- vite.config.ts              Vite config. Allows all hosts (proxied iframe),
+|                               binds to PORT env, configures @ alias to /src.
+|
++-- package.json                Workspace member @workspace/phil-101.
+|                               Depends on @workspace/api-client-react.
+|                               Stack: React 18, Vite, Tailwind, shadcn/ui,
+|                               Radix UI, wouter, TanStack Query, sonner.
+|
++-- src/
+    |
+    +-- main.tsx
+    |   React entry point. Creates root, mounts <App />, imports index.css.
+    |
+    +-- App.tsx
+    |   Root component. Sets up:
+    |   - QueryClient + QueryClientProvider (TanStack)
+    |   - TooltipProvider, sonner Toaster
+    |   - wouter router with all student + admin routes
+    |   - <Nav /> + <Footer /> shell, route-protected page tree
+    |
+    +-- index.css
+    |   Global stylesheet. Tailwind base/components/utilities + warm-parchment
+    |   theme (CSS custom properties for light/dark, serif headings,
+    |   stone-tone palette).
+    |
+    +-- pages/
+    |   |
+    |   +-- start-here.tsx
+    |   |   Landing page + passwordless registration.
+    |   |   - Email + name sign-in form (calls useLogin mutation)
+    |   |   - About this course block ("14 modules ...")
+    |   |   - Self-introduction textarea (saves via useSaveIntro)
+    |   |   - InfoCard tiles for tech requirements / netiquette / AI policy
+    |   |
+    |   +-- syllabus.tsx
+    |   |   Formal syllabus. Renders Course Information, Learning Outcomes,
+    |   |   Required Materials, Grading + module table (auto-totals points
+    |   |   from curriculum), Schedule, Late Policy, Engagement Expectations,
+    |   |   AI Policy, Support, Institutional Policies. Print-as-PDF button.
+    |   |
+    |   +-- modules.tsx
+    |   |   Module directory. Lists all 14 modules with type badge, points,
+    |   |   first objective preview. Implements sequential unlock based on
+    |   |   getProgress().completedModuleIds. Admin override via ?admin=true.
+    |   |
+    |   +-- module-detail.tsx
+    |   |   PRIMARY learning surface. For one moduleId:
+    |   |   - Renders module objectives + assigned reading + assignment prompt
+    |   |   - Hosts <DraftWorkshop /> (Box 1) and <IntegrityCanvas /> (Box 2)
+    |   |   - Inline AI helpers (study-guide / tutorial / podcast / rewrite)
+    |   |   - Sticky <TutorPanel /> (drawer on mobile)
+    |   |   - One-time <IntegrityDisclosure /> gate before assignment access
+    |   |
+    |   +-- tutor.tsx
+    |   |   Full-page AI Tutor (alternate to drawer). Module switcher in left
+    |   |   pane shows module context (objectives, assignment) alongside the
+    |   |   chat. Uses SSE streaming via lib/sse.ts for incremental tokens.
+    |   |
+    |   +-- assessments.tsx
+    |   |   Student progress dashboard. Earned-vs-total points across modules,
+    |   |   per-module submission status with AI badge, "Practice Critique"
+    |   |   tool that calls /tutor/:moduleId/critique to generate a deliberately
+    |   |   mediocre sample for the student to analyze.
+    |   |
+    |   +-- accessibility.tsx
+    |   |   WCAG 2.1 AA statement, keyboard-nav map, vendor accessibility
+    |   |   links, plus academic-integrity / monitoring disclosure (the
+    |   |   "I understand" copy that gates the canvas).
+    |   |
+    |   +-- support.tsx
+    |   |   Tech support / academic support / AI Tutor usage tips /
+    |   |   counseling + wellness contacts / privacy disclosure.
+    |   |
+    |   +-- diagnostic.tsx
+    |   |   Admin self-test page. Triggers POST /diagnostic/run and renders
+    |   |   pass/fail rows for env vars, DB connectivity, Anthropic ping,
+    |   |   and a synthetic student flow.
+    |   |
+    |   +-- admin-submissions.tsx
+    |   |   Instructor dashboard. Sortable / filterable table of all
+    |   |   submissions across all students, AI-likelihood badges, bootstrap
+    |   |   admin button (one-time), per-student accommodation toggles.
+    |   |
+    |   +-- admin-submission-detail.tsx
+    |   |   Per-submission deep dive. Keystroke replay tool, AI score history
+    |   |   sparkline, automated activity report (paste bursts, sustained-red
+    |   |   periods, etc.), reviewer status set to pending / reviewed / flagged.
+    |   |
+    |   +-- not-found.tsx
+    |       Standard 404 page.
+    |
+    +-- components/
+    |   |
+    |   +==================================================================+
+    |   |       INTEGRITY / DRAFTING SYSTEM (3-COMPONENT ARCHITECTURE)     |
+    |   +==================================================================+
+    |   |
+    |   +-- draft-workshop.tsx           [BOX 1 - SANDBOX]
+    |   |   Free-form draft area. Pasting + free editing allowed. Student
+    |   |   gets ONE AI feedback round per module. Sends draft to
+    |   |   POST /drafts/:moduleId, receives Markdown feedback, then locks
+    |   |   the draft from further updates. Renders the feedback in-place.
+    |   |
+    |   +-- integrity-canvas.tsx         [BOX 2 - MONITORED FINAL]
+    |   |   The final-submission textarea. Captures every keystroke with
+    |   |   timestamp, blocks paste from outside the canvas, throttles a
+    |   |   live AI-detection score from /canvas/:moduleId/score, and renders
+    |   |   a traffic-light bar plus highlight overlay. On submit it ships
+    |   |   content + keystroke history to POST /submissions.
+    |   |
+    |   +-- integrity-disclosure.tsx     [GATE]
+    |       Modal shown on first assignment access. Explains monitoring,
+    |       persists ack via POST /integrity/ack, blocks the canvas until
+    |       student clicks "I understand".
+    |   |
+    |   +==================================================================+
+    |   |               AI TUTORING + ACTION COMPONENTS                    |
+    |   +==================================================================+
+    |   |
+    |   +-- tutor-panel.tsx
+    |   |   Reusable AI Tutor surface. Used as a drawer in module-detail
+    |   |   and inline in tutor.tsx. Subscribes to SSE stream from
+    |   |   POST /tutor/:moduleId/message, accumulates assistant text token
+    |   |   by token, persists conversation per (studentId, moduleId).
+    |   |
+    |   +-- inline-ai-action.tsx
+    |   |   Generic launcher for one-shot AI actions (study-guide, tutorial,
+    |   |   podcast, rewrite, read-draft). Calls POST /ai/:moduleId/:action,
+    |   |   streams the response, renders Markdown.
+    |   |
+    |   +-- ai-score-badge.tsx
+    |       Visual rendering of GPTZero results. Two variants: compact pill
+    |       and descriptive card. Color codes by risk band (low/mid/high).
+    |   |
+    |   +==================================================================+
+    |   |                    SHELL + AUTH COMPONENTS                       |
+    |   +==================================================================+
+    |   |
+    |   +-- nav.tsx
+    |   |   Sticky top bar. Brand "English Composition 101", primary nav
+    |   |   links (Start Here, Syllabus, Modules, General Tutor, Assessments,
+    |   |   Support, Accessibility, Diagnostic), admin link if isAdmin,
+    |   |   student name + sign-out, mobile hamburger drawer.
+    |   |
+    |   +-- page-shell.tsx
+    |   |   <PageShell title intro> wrapper used by every page for a
+    |   |   consistent header/intro slab. Also exports <Footer /> with
+    |   |   QM Higher-Ed Rubric attribution.
+    |   |
+    |   +-- require-auth.tsx
+    |   |   Wrapper component. If getCurrentStudent() returns no student,
+    |   |   redirects to /. Used to wrap protected pages in App.tsx.
+    |   |
+    |   +-- ui/
+    |       Full shadcn/ui primitive set built on Radix UI (~55 files):
+    |       button, card, dialog, sheet, dropdown-menu, table, tabs,
+    |       tooltip, toast, sonner, accordion, badge, alert, calendar,
+    |       carousel, chart, command, drawer, form, input, label,
+    |       popover, progress, scroll-area, select, separator, sidebar,
+    |       skeleton, slider, switch, textarea, toggle, etc.
+    |
+    +-- hooks/
+    |   |
+    |   +-- use-mobile.tsx
+    |   |   Media-query hook returning true when viewport < 768px.
+    |   |
+    |   +-- use-toast.ts
+    |       State + actions for app-wide toast notifications.
+    |
+    +-- lib/
+    |   |
+    |   +-- admin.ts
+    |   |   useAdminOverride() hook - reads ?admin=true from URL to expose
+    |   |   instructor-only views (unlock all modules, see admin links).
+    |   |
+    |   +-- integrity-api.ts
+    |   |   Hand-written fetch wrappers for endpoints not covered by codegen
+    |   |   (drafts, canvas autosave, canvas score, admin submission review,
+    |   |   accommodation toggle, integrity ack, admin bootstrap, diagnostic).
+    |   |
+    |   +-- sse.ts
+    |   |   streamSSE(url, body, onChunk, onDone) - parses text/event-stream
+    |   |   responses for tutor + AI-action streaming endpoints.
+    |   |
+    |   +-- utils.ts
+    |       cn() helper (clsx + tailwind-merge).
+    |
+    +-- data/
+        |
+        +-- curriculum.ts
+            VERBATIM course content. Exports `Module` interface +
+            `modules: Module[]` with all 14 entries. Each Module has:
+              { id, number, title, points, type, objectives,
+                reading, assignment, modelResponse }
+            Mirrored byte-for-byte to api-server's lib/curriculum.ts.
+
+            MODULE TYPES:
+              - discussion (50 pts each x 8)
+              - essay      (50 pts each x 5)
+              - termpaper  (200 pts, combined outline + final)
+            TOTAL: 850 points, 14 modules.
+
+            MODULE LIST:
+              d1  Discussion 1: The Rhetorical Situation
+              e1  Essay 1:      Audience and Purpose
+              d2  Discussion 2: Thesis Statements and Claims
+              e2  Essay 2:      Argument Structure
+              d3  Discussion 3: Evidence and Source Evaluation
+              e3  Essay 3:      Logical Fallacies
+              d4  Discussion 4: Voice, Tone, and Style
+              e4  Essay 4:      Rhetorical Analysis
+              d5  Discussion 5: The Writing Process and Revision
+              e5  Essay 5:      Persuasion and Ethical Argument
+              d6  Discussion 6: Citation, Plagiarism, Intellectual Honesty
+              d7  Discussion 7: Clarity, Concision, and the Sentence
+              d8  Discussion 8: Writing in the Age of AI
+              tp  Term Paper (Outline + Final)
+
+
+================================================================================
+ARTIFACT 2: artifacts/api-server/  - BACKEND (Express 5 + Node.js)
+================================================================================
+
+artifacts/api-server/
+|
++-- build.mjs                   esbuild bundler config (Pino plugin).
+|                               Bundles src/index.ts + worker scripts to
+|                               dist/index.mjs and pino-* worker bundles.
+|
++-- package.json                @workspace/api-server. Depends on
+|                               @workspace/api-zod, @workspace/db,
+|                               @workspace/integrations-anthropic-ai.
+|                               Runtime: express, drizzle-orm, pino, cors,
+|                               cookie-parser.
+|
++-- src/
+    |
+    +-- index.ts
+    |   Server entry point. Reads PORT env, calls createApp(), listens,
+    |   logs startup banner.
+    |
+    +-- app.ts
+    |   Express app factory. Middleware order:
+    |     1. pinoHttp (request logging)
+    |     2. cors (allow same-origin + dev preview)
+    |     3. cookieParser (signed cookie support)
+    |     4. express.json + urlencoded
+    |     5. attachSession (parses session cookie -> req.studentId)
+    |     6. mount /api -> routes/index.ts
+    |     7. error handler
+    |
+    +-- types.d.ts
+    |   Augments Express Request to add `studentId?: number` and
+    |   `log: pino.Logger`.
+    |
+    +-- middlewares/
+    |   |
+    |   +-- session.ts
+    |       Cookie-based session layer (no password):
+    |         - attachSession()      decodes signed cookie -> req.studentId
+    |         - requireStudent()     401 if no studentId
+    |         - requireAdmin()       403 if not isAdmin
+    |         - setSessionCookie()   issues HttpOnly signed cookie
+    |         - clearSessionCookie() blanks cookie on logout
+    |
+    +-- routes/
+    |   |
+    |   +-- index.ts
+    |   |   Aggregator. Mounts every sub-router under /api:
+    |   |     /healthz, /auth/*, /progress/*, /submissions/*, /tutor/*,
+    |   |     /drafts/*, /canvas/*, /ai/*, /integrity/*, /admin/*,
+    |   |     /diagnostic/*
+    |   |
+    |   +-- health.ts
+    |   |   GET  /healthz                        -> { status: "ok" }
+    |   |
+    |   +-- auth.ts
+    |   |   POST /auth/login                     idempotent register-or-login
+    |   |   POST /auth/logout                    clears cookie
+    |   |   GET  /auth/me                        current student or null
+    |   |
+    |   +-- progress.ts
+    |   |   GET  /progress                       completedModuleIds + intro
+    |   |   POST /progress/intro                 saves student.intro
+    |   |
+    |   +-- integrity.ts
+    |   |   POST /integrity/ack                  timestamps integrityAckAt
+    |   |   POST /admin/bootstrap                first caller becomes admin
+    |   |
+    |   +-- submissions.ts
+    |   |   GET  /submissions                          student's own
+    |   |   POST /submissions                          final submit + AI check
+    |   |   GET  /submissions/module/:moduleId         latest for module
+    |   |   - Enforces sequential gating (prior modules done)
+    |   |   - Triggers async runAICheck() (GPTZero) -> aiStatus pending->done
+    |   |
+    |   +-- drafts.ts                            ONE-ROUND DRAFT FEEDBACK
+    |   |   GET  /drafts/:moduleId               fetch draft + any feedback
+    |   |   POST /drafts/:moduleId               submit for AI feedback,
+    |   |                                        locks draft on success
+    |   |
+    |   +-- canvas.ts                            LIVE INTEGRITY CANVAS
+    |   |   GET  /canvas/:moduleId               unsaved work + history
+    |   |   POST /canvas/:moduleId/autosave      content + keystrokes +
+    |   |                                        scoreHistory
+    |   |   POST /canvas/:moduleId/score         GPTZero proxy (skipped
+    |   |                                        when student.accommodated)
+    |   |
+    |   +-- tutor.ts                             AI TUTOR (SOCRATIC)
+    |   |   GET  /tutor/:moduleId/conversation   fetch or create thread
+    |   |   POST /tutor/:moduleId/message        SSE stream from Claude
+    |   |   POST /tutor/:moduleId/critique       generate mediocre answer
+    |   |
+    |   +-- ai-actions.ts                        ON-DEMAND AI HELPERS
+    |   |   POST /ai/:moduleId/:action           SSE-stream one of:
+    |   |     - study-guide   instructor-style summary
+    |   |     - tutorial      step-by-step walkthrough
+    |   |     - podcast       350-450 word audio script
+    |   |     - rewrite       reading rewritten for clarity
+    |   |     - read-draft    formative feedback on student draft
+    |   |
+    |   +-- admin.ts                             INSTRUCTOR DASHBOARD
+    |   |   GET  /admin/submissions              all submissions, all students
+    |   |   GET  /admin/submissions/:id          full detail + keystrokes +
+    |   |                                        scoreHistory + activityReport
+    |   |   POST /admin/submissions/:id/review   set reviewStatus
+    |   |   GET  /admin/students                 student roster
+    |   |   POST /admin/students/:id/accommodate toggle accommodated flag
+    |   |
+    |   +-- diagnostic.ts
+    |       POST /diagnostic/run                 e2e self-test:
+    |         - env vars present
+    |         - DB ping
+    |         - Anthropic ping
+    |         - functional fake-student flow (login -> canvas -> submit)
+    |
+    +-- lib/
+        |
+        +==================================================================+
+        |          AI TUTOR + INTEGRITY MONITORING SUPPORT LAYER           |
+        +==================================================================+
+        |
+        +-- curriculum.ts
+        |   Mirror of artifacts/phil-101/src/data/curriculum.ts.
+        |   Imported by tutor.ts, drafts.ts, ai-actions.ts so the AI sees
+        |   the same module text the student sees. Exports moduleById(),
+        |   moduleIndexById(), and the 14-module array.
+        |
+        +-- gptzero.ts
+        |   Wrapper around the GPTZero detection API.
+        |   - scoreText(text) -> { aiScore, aiClass, raw }
+        |   - Used by submissions.ts (final score on submit) and
+        |     canvas.ts (live throttled score during typing)
+        |
+        +-- activityReport.ts
+        |   Heuristic analyzer over keystroke + score telemetry. Detects:
+        |     - sustainedRed   periods of high AI probability
+        |     - burstTyping    suspicious word-per-second spikes
+        |     - pasteishBursts large chunks appearing without keystrokes
+        |   Output stored in submissions.activityReport for instructor view.
+        |
+        +-- logger.ts
+            Pino logger factory. PII redaction (email/cookie), pretty
+            transport in development, JSON in production.
+
+
+================================================================================
+SHARED LIBRARIES (lib/)
+================================================================================
+
+lib/api-spec/                     SOURCE OF TRUTH (hand-written)
+|
++-- openapi.yaml                  OpenAPI 3.x spec. Title "Api", version
+|                                 0.1.0, base /api, description "English
+|                                 Composition 101 course API". All
+|                                 frontend-visible routes + schemas live here.
++-- orval.config.ts               Orval codegen config. Two targets:
+                                    - api-zod         -> zod schemas
+                                    - api-client-react -> React Query hooks
+
+lib/api-zod/                      CODEGEN (do not edit by hand)
+|
++-- src/index.ts                  Re-exports all generated schemas
++-- src/generated/api.ts          Generated zod schemas for every body /
+|                                 response shape (loginBody, submission,
+|                                 progress, tutorMessage, etc.)
++-- src/generated/types/*.ts      Per-schema TS types
+
+lib/api-client-react/             CODEGEN (Orval) + custom fetch wrapper
+|
++-- src/index.ts                  Public exports (hooks + setBaseUrl)
++-- src/generated/api.ts          Generated React Query hooks:
+|                                   useLogin, useLogout, useGetProgress,
+|                                   useSaveIntro, useCreateSubmission,
+|                                   useGetSubmissionForModule,
+|                                   useGetTutorConversation,
+|                                   useGenerateCritiqueAnswer, etc.
++-- src/generated/api.schemas.ts  Generated request/response types
++-- src/custom-fetch.ts           Hand-written fetch impl. Handles cookie
+                                  credentials, BASE_URL, error normalization.
+
+lib/db/                           DRIZZLE ORM + POSTGRES (hand-written)
+|
++-- drizzle.config.ts             Drizzle Kit config (push / migrations)
++-- src/index.ts                  Exports `db` (drizzle client) + `pool`
++-- src/schema/index.ts           Barrel - re-exports every table
++-- src/schema/students.ts        students table:
+|                                   id, email (unique), name, intro,
+|                                   isAdmin, accommodated, integrityAckAt,
+|                                   createdAt
++-- src/schema/submissions.ts     submissions table:
+|                                   id, studentId(FK), moduleId, content,
+|                                   aiScore, aiClass, aiStatus,
+|                                   keystrokes(jsonb), scoreHistory(jsonb),
+|                                   activityReport(jsonb), flaggedOnSubmit,
+|                                   reviewStatus, createdAt
++-- src/schema/canvasSessions.ts  canvas_sessions table (work in progress):
+|                                   id, studentId, moduleId, content,
+|                                   keystrokes, scoreHistory, updatedAt
+|                                   UNIQUE INDEX (studentId, moduleId)
++-- src/schema/drafts.ts          assignment_drafts table (Box 1):
+|                                   id, studentId, moduleId, content,
+|                                   feedback, feedbackAt, locked, createdAt
++-- src/schema/tutorConversations.ts
+|                                 Two tables:
+|                                   tutor_conversations: id, studentId,
+|                                                         moduleId, createdAt
+|                                   tutor_messages:      id, conversationId,
+|                                                         role, content,
+|                                                         createdAt
++-- src/schema/conversations.ts   Generic chat (provided by Anthropic
++-- src/schema/messages.ts        integration template; secondary use)
+
+lib/integrations-anthropic-ai/    HAND-WRITTEN ANTHROPIC SDK WRAPPER
+|
++-- src/index.ts                  Public exports (anthropic client + batch)
++-- src/client.ts                 Anthropic SDK init using env vars
+|                                 AI_INTEGRATIONS_ANTHROPIC_BASE_URL +
+|                                 AI_INTEGRATIONS_ANTHROPIC_API_KEY.
+|                                 Throws at startup if missing.
++-- src/batch/index.ts            batchProcess(items, fn, opts)  +
++-- src/batch/utils.ts            batchProcessWithSSE() with retry, rate
+                                  limiting, isRateLimitError() helper.
+
+
+================================================================================
+DATA + CONTROL FLOWS (HOW THE PARTS TALK TO EACH OTHER)
+================================================================================
+
++----------------------------------------------------------------------------+
+|                          1. STUDENT WRITING FLOW                          |
++----------------------------------------------------------------------------+
+
+   Student opens module M
+            |
+            v
+   IntegrityDisclosure modal (first time only)
+   POST /integrity/ack  -> students.integrityAckAt
+            |
+            v
+   +----------------------+      +-------------------------+
+   |  DraftWorkshop       |      |  IntegrityCanvas        |
+   |  (Box 1 - sandbox)   |      |  (Box 2 - monitored)    |
+   |                      |      |                         |
+   |  free paste / edit   |      |  keystrokes captured    |
+   |                      |      |  paste-from-outside     |
+   |  POST /drafts/:M     |      |  blocked                |
+   |    body: { content } |      |                         |
+   |  ->  Anthropic       |      |  POST /canvas/:M/score  |
+   |  ->  Markdown        |      |    -> GPTZero proxy     |
+   |      feedback        |      |    -> live traffic-light|
+   |                      |      |                         |
+   |  drafts.locked=true  |      |  POST /canvas/:M/auto-  |
+   |  (one round only)    |      |       save (content +   |
+   |                      |      |       keystrokes +      |
+   |                      |      |       scoreHistory)     |
+   +----------------------+      +-------------------------+
+                                          |
+                                          v
+                                 POST /submissions
+                                   { moduleId, content,
+                                     keystrokes, scoreHistory }
+                                          |
+                                          v
+                                 + sequential-gating check
+                                   (all prior modules done?)
+                                 + insert submissions row
+                                 + spawn async runAICheck:
+                                     gptzero.scoreText()
+                                     -> aiScore, aiClass
+                                     -> activityReport()
+                                     -> aiStatus = "completed"
+                                          |
+                                          v
+                                 GET /progress now lists M
+                                 as completed -> next unlocks
+
+
++----------------------------------------------------------------------------+
+|                       2. AI TUTOR (SSE STREAMING) FLOW                    |
++----------------------------------------------------------------------------+
+
+   tutor-panel.tsx / tutor.tsx
+            |
+   GET /tutor/:moduleId/conversation
+            |  (creates row in tutor_conversations if absent)
+            v
+   user types question, hits send
+            |
+   POST /tutor/:moduleId/message         (text/event-stream response)
+            |
+   server: build system prompt =
+     "You are the AI Tutor for English Composition 101 ..."
+     + courseOverview() (titles of all 14 modules)
+     + CURRENT MODULE block (title, objectives, reading, assignment)
+     + studentIntro
+     + prior tutor_messages
+            |
+   server: anthropic.messages.stream({ model: "claude-sonnet-4-...",
+                                       max_tokens: 8192, messages })
+            |
+   for each content_block_delta -> res.write("data: { content }\n\n")
+                                  -> persist to fullResponse
+            |
+   on stream end -> insert into tutor_messages + send "data: { done: true }"
+            |
+            v
+   client lib/sse.ts streams chunks into the message bubble
+
+
++----------------------------------------------------------------------------+
+|                        3. ON-DEMAND AI ACTIONS FLOW                       |
++----------------------------------------------------------------------------+
+
+   inline-ai-action.tsx (in module-detail.tsx)
+            |
+   POST /ai/:moduleId/:action       action is one of:
+            |                          study-guide | tutorial | podcast |
+            |                          rewrite     | read-draft
+            v
+   server: routes/ai-actions.ts builds {system, user, maxTokens}
+            based on action + curriculum.moduleById(moduleId)
+            |
+            v
+   anthropic.messages.stream() -> text/event-stream -> Markdown rendered
+
+
++----------------------------------------------------------------------------+
+|                       4. ADMIN REVIEW FLOW                                |
++----------------------------------------------------------------------------+
+
+   First instructor visits /admin/submissions
+            |
+   POST /admin/bootstrap (only succeeds if no admins exist yet)
+            |  students.isAdmin = true for caller
+            v
+   GET /admin/submissions  -> table of every submission
+            |
+   click row -> GET /admin/submissions/:id
+            |
+            v
+   admin-submission-detail.tsx renders:
+     - keystroke replay (timestamps + values)
+     - GPTZero score history sparkline
+     - activityReport bullets (sustainedRed / burstTyping / pasteishBursts)
+            |
+   POST /admin/submissions/:id/review
+     { reviewStatus: "reviewed" | "flagged" }
+
+
+================================================================================
+ENVIRONMENT VARIABLES + EXTERNAL SERVICES
+================================================================================
+
+REQUIRED:
+  AI_INTEGRATIONS_ANTHROPIC_BASE_URL   set by Replit AI Integrations
+  AI_INTEGRATIONS_ANTHROPIC_API_KEY    set by Replit AI Integrations
+  DATABASE_URL                         Postgres connection string (Neon-backed)
+  PORT                                 per-artifact port assigned by platform
+  SESSION_COOKIE_SECRET                signed-cookie HMAC key
+
+OPTIONAL:
+  GPTZERO_API_KEY                      enables AI-detection scoring
+  NODE_ENV                             "development" | "production"
+
+EXTERNAL SERVICES:
+  Anthropic Claude (via Replit AI Integrations proxy)
+  GPTZero (AI-detection)
+  Postgres (Replit-managed)
+
+
+================================================================================
+KEY NOTES FOR FUTURE ENHANCEMENT
+================================================================================
+
+1. CURRICULUM IS DUAL-MIRRORED.
+   artifacts/phil-101/src/data/curriculum.ts must stay byte-identical to
+   artifacts/api-server/src/lib/curriculum.ts (api-server's mirror has one
+   extra header comment). Any module edit must touch both.
+
+2. API CONTRACT IS CODEGEN.
+   Hand edits to lib/api-zod/ and lib/api-client-react/generated/* will be
+   overwritten. Edit lib/api-spec/openapi.yaml then run:
+     pnpm --filter @workspace/api-spec run codegen
+   Endpoints not in openapi.yaml use lib/integrity-api.ts (hand fetch).
+
+3. SEQUENTIAL MODULE GATING.
+   Enforced server-side in routes/submissions.ts based on completedModuleIds
+   in progress.ts. Client respects same logic in modules.tsx. Admin override
+   is `?admin=true` query param + isAdmin server flag.
+
+4. SSE STREAMING ENDPOINTS.
+   Tutor and AI-actions return text/event-stream. Orval cannot generate a
+   usable client for these - they are consumed by lib/sse.ts on the client.
+
+5. INTEGRITY MONITORING IS COMPOSED OF FIVE COOPERATING PIECES:
+   - integrity-disclosure.tsx        (gate / consent)
+   - draft-workshop.tsx              (Box 1 - one feedback round)
+   - integrity-canvas.tsx            (Box 2 - keystroke capture, paste block)
+   - lib/gptzero.ts                  (live + final AI scoring)
+   - lib/activityReport.ts           (post-hoc heuristic flags)
+   Disabling any single piece silently degrades the others.
+
+6. AUTH IS PASSWORDLESS.
+   POST /auth/login with email + name is idempotent (creates or matches).
+   Single signed HttpOnly cookie carries studentId. No password storage.
+
+7. ADMIN IS BOOTSTRAPPED.
+   First caller of POST /admin/bootstrap (when no admins exist) becomes the
+   admin. Subsequent calls are rejected.
+
+8. EVERY AI PROMPT REFERENCES THE CURRICULUM.
+   tutor.ts, drafts.ts, ai-actions.ts all import moduleById() so the AI's
+   system prompt always contains the exact module title, objectives, reading,
+   and assignment text the student is seeing.
+
+================================================================================
+                                  END OF FILE
+================================================================================

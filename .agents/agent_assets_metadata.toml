@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "nNwbceE1yJz6hjsnuYNqp"
+uri = "file://attached_assets/ENGCOMP101_FILE_TREE.txt"
+type = "text"
+title = "English Composition 101 - Complete Blueprint"
