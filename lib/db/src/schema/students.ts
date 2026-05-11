@@ -1,5 +1,6 @@
 import {
   boolean,
+  jsonb,
   pgTable,
   serial,
   text,
@@ -19,6 +20,13 @@ export const studentsTable = pgTable("students", {
   isAdmin: boolean("is_admin").notNull().default(false),
   accommodated: boolean("accommodated").notNull().default(false),
   integrityAckAt: timestamp("integrity_ack_at", { withTimezone: true }),
+  /**
+   * Per-student writing-process baseline. Built from this student's first
+   * two submissions (averaged). Used by processForensics to flag unusual
+   * deviation from a student's own typing rhythm.
+   * Shape: { n: number, features: { ...feature_means } }
+   */
+  processBaseline: jsonb("process_baseline"),
 });
 
 export const insertStudentSchema = createInsertSchema(studentsTable).omit({

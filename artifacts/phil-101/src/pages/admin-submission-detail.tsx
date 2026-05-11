@@ -129,6 +129,22 @@ export default function AdminSubmissionDetail() {
       <Card>
         <CardHeader>
           <CardTitle className="font-serif text-lg">
+            Writing-process forensics (diachronic)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ProcessForensicsView
+            processScore={sub.processScore}
+            processClass={sub.processClass}
+            processFeatures={sub.processFeatures}
+            processFlags={sub.processFlags}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="font-serif text-lg">
             Activity report
           </CardTitle>
         </CardHeader>
@@ -167,6 +183,222 @@ export default function AdminSubmissionDetail() {
         </CardContent>
       </Card>
     </PageShell>
+  );
+}
+
+function ProcessForensicsView({
+  processScore,
+  processClass,
+  processFeatures,
+  processFlags,
+}: {
+  processScore: number | null;
+  processClass: "human" | "mixed" | "likelyAI" | null;
+  processFeatures: Record<string, unknown> | null;
+  processFlags: string[] | null;
+}) {
+  if (processScore == null && !processFeatures) {
+    return (
+      <p className="text-sm text-stone-500">
+        No writing-process analysis available (legacy submission).
+      </p>
+    );
+  }
+  const f = (processFeatures ?? {}) as Record<string, unknown>;
+  const num = (k: string): number | null =>
+    typeof f[k] === "number" ? (f[k] as number) : null;
+  const baselineSnap = (f.__baselineSnapshot ?? null) as
+    | Record<string, number>
+    | null;
+  const baselineN = typeof f.__baselineN === "number" ? f.__baselineN : 0;
+  const adjScore =
+    typeof f.__baselineAdjustedScore === "number"
+      ? f.__baselineAdjustedScore
+      : null;
+  const baseNum = (k: string): number | null =>
+    baselineSnap && typeof baselineSnap[k] === "number"
+      ? baselineSnap[k]
+      : null;
+  const fmt = (n: number | null, suffix = "", digits = 0): string =>
+    n == null ? "—" : `${n.toFixed(digits)}${suffix}`;
+  const fmtPct = (n: number | null, digits = 0): string =>
+    n == null ? "—" : `${(n * 100).toFixed(digits)} %`;
+  const featureRows: Array<[string, string, string, string]> = [
+    [
+      "Inter-keystroke timing stdev",
+      fmt(num("burstUniformity"), " ms"),
+      fmt(baseNum("burstUniformity"), " ms"),
+      "low = transcription-like",
+    ],
+    [
+      "Median pause before new sentence",
+      fmt(num("pauseBeforeNewSentence"), " ms"),
+      fmt(baseNum("pauseBeforeNewSentence"), " ms"),
+      "human typically 1500–3000 ms",
+    ],
+    [
+      "Median pause before new paragraph",
+      fmt(num("pauseBeforeNewParagraph"), " ms"),
+      fmt(baseNum("pauseBeforeNewParagraph"), " ms"),
+      "human typically 3000–8000 ms",
+    ],
+    [
+      "Deletion ratio",
+      fmtPct(num("deletionRatio"), 1),
+      fmtPct(baseNum("deletionRatio"), 1),
+      "human typically 15–40%",
+    ],
+    [
+      "Structural edits",
+      String(num("structuralEditCount") ?? "—"),
+      fmt(baseNum("structuralEditCount"), "", 1),
+      "large or far-back deletions",
+    ],
+    [
+      "Caret backtracks",
+      String(num("caretBacktrackCount") ?? "—"),
+      fmt(baseNum("caretBacktrackCount"), "", 1),
+      "backward jumps >100 chars",
+    ],
+    [
+      "Abandoned-and-restarted starts",
+      String(num("abandonedStartCount") ?? "—"),
+      fmt(baseNum("abandonedStartCount"), "", 1),
+      "burst typed, deleted, retried near same caret",
+    ],
+    [
+      "Burst-length variability (CV)",
+      fmt(num("burstLengthCV"), "", 2),
+      fmt(baseNum("burstLengthCV"), "", 2),
+      "human typically >0.4",
+    ],
+    [
+      "Front-to-back linearity",
+      fmtPct(num("frontToBackLinearity")),
+      fmtPct(baseNum("frontToBackLinearity")),
+      "fraction of inserts at end-of-doc",
+    ],
+    [
+      "Active typing time",
+      fmt(num("totalActiveSeconds"), " s"),
+      "—",
+      "excludes idle gaps >30s",
+    ],
+    [
+      "Chars per active second",
+      fmt(num("charsPerSecond"), "", 2),
+      fmt(baseNum("charsPerSecond"), "", 2),
+      "raw typing rate",
+    ],
+  ];
+  const burstLengths = Array.isArray(f.burstLengths)
+    ? (f.burstLengths as number[])
+    : [];
+  const classBadgeVariant: "secondary" | "destructive" | "outline" =
+    processClass === "likelyAI"
+      ? "destructive"
+      : processClass === "mixed"
+        ? "secondary"
+        : "outline";
+
+  return (
+    <div className="space-y-4" data-testid="process-forensics">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <Badge variant={classBadgeVariant} data-testid="process-score-badge">
+          Process score: {processScore ?? "—"}
+        </Badge>
+        <Badge variant="outline">
+          class: {processClass ?? "—"}
+        </Badge>
+        {adjScore != null && (
+          <Badge variant="outline" data-testid="process-baseline-adjusted">
+            vs. this student's baseline (n={baselineN}): {adjScore}
+          </Badge>
+        )}
+        {baselineN === 0 && (
+          <Badge variant="outline" className="text-stone-500">
+            no baseline yet (first submission)
+          </Badge>
+        )}
+      </div>
+      {processFlags && processFlags.length > 0 && (
+        <div>
+          <div className="mb-1 text-xs font-semibold uppercase text-stone-600">
+            Findings
+          </div>
+          <ul className="list-disc space-y-1 pl-5 text-sm text-stone-800">
+            {processFlags.map((flag) => (
+              <li key={flag}>{flag}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <div>
+        <div className="mb-1 text-xs font-semibold uppercase text-stone-600">
+          Feature breakdown
+        </div>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs uppercase text-stone-500">
+              <th className="py-1 pr-3 font-normal">Feature</th>
+              <th className="py-1 pr-3 font-normal">This submission</th>
+              <th className="py-1 pr-3 font-normal">Student baseline</th>
+              <th className="py-1 font-normal">Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {featureRows.map(([label, value, base, hint]) => (
+              <tr key={label} className="border-t border-stone-100">
+                <td className="py-1.5 pr-3 text-stone-600">{label}</td>
+                <td className="py-1.5 pr-3 font-medium text-stone-900">
+                  {value}
+                </td>
+                <td className="py-1.5 pr-3 text-stone-700">{base}</td>
+                <td className="py-1.5 text-xs text-stone-500">{hint}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {burstLengths.length > 0 && (
+        <div>
+          <div className="mb-1 text-xs font-semibold uppercase text-stone-600">
+            Typing-burst lengths (chars per burst)
+          </div>
+          <BurstChart values={burstLengths} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BurstChart({ values }: { values: number[] }) {
+  if (values.length === 0) return null;
+  const w = 600;
+  const h = 80;
+  const max = Math.max(1, ...values);
+  const barW = w / values.length;
+  return (
+    <svg
+      viewBox={`0 0 ${w} ${h}`}
+      className="h-20 w-full"
+      data-testid="burst-chart"
+    >
+      {values.map((v, i) => {
+        const bh = Math.max(1, (v / max) * (h - 4));
+        return (
+          <rect
+            key={i}
+            x={i * barW}
+            y={h - bh}
+            width={Math.max(1, barW - 1)}
+            height={bh}
+            fill="#1c1917"
+            opacity={0.7}
+          />
+        );
+      })}
+    </svg>
   );
 }
 

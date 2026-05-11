@@ -3,6 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, canvasSessionsTable, studentsTable } from "@workspace/db";
 import { attachSession, requireStudent } from "../middlewares/session";
 import { checkWithGPTZero } from "../lib/gptzero";
+import { analyzeProcess } from "../lib/processForensics";
 
 const router: IRouter = Router();
 router.use(attachSession);
@@ -114,6 +115,51 @@ router.post(
       aiScore: result.aiScore,
       aiClass: result.aiClass,
       sentences: result.sentences,
+      accommodated: false,
+    });
+  },
+);
+
+/**
+ * Diachronic process score (live preview). Client throttles calls to
+ * once per ~60s. Accommodated students always get a neutral response.
+ *
+ * Body: { keystrokes: unknown[]; content: string }
+ * Response: { processScore, processClass, accommodated }
+ *
+ * NOTE: We deliberately do NOT return the underlying feature breakdown
+ * to the client during typing — exposing it would tell sophisticated
+ * cheaters exactly what to spoof. The score and class are sufficient
+ * for the live traffic-light bar.
+ */
+router.post(
+  "/canvas/:moduleId/processScore",
+  requireStudent,
+  async (req: Request<{ moduleId: string }>, res: Response) => {
+    const studentId = req.studentId as number;
+    if (await isAccommodated(studentId)) {
+      res.json({
+        processScore: null,
+        processClass: null,
+        accommodated: true,
+      });
+      return;
+    }
+    const body = req.body as { keystrokes?: unknown; content?: unknown };
+    const content = typeof body.content === "string" ? body.content : "";
+    const keystrokes = Array.isArray(body.keystrokes) ? body.keystrokes : [];
+    if (keystrokes.length < 20 || content.length < 80) {
+      res.json({
+        processScore: null,
+        processClass: null,
+        accommodated: false,
+      });
+      return;
+    }
+    const result = analyzeProcess(keystrokes, content);
+    res.json({
+      processScore: result.processScore,
+      processClass: result.processClass,
       accommodated: false,
     });
   },

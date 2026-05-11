@@ -1,0 +1,53 @@
+Add diachronic AI-detection (writing-process forensics) to the Integrity Canvas.
+We already capture keystrokes in integrity-canvas.tsx and persist them via POST /canvas/:moduleId/autosave as keystrokes: jsonb on canvas_sessions and submissions. We currently use that stream only for replay. I want to add a second AI-detection signal based on the shape of the writing process itself, not the final text. This catches the failure mode GPTZero misses: student gets AI to write the paper, paraphrases it sentence-by-sentence, types it into the canvas. Final text scores human; process telemetry will not.
+1. Expand keystroke capture in integrity-canvas.tsx.
+Currently we log {t, key, value}. Expand each event to:
+{ t, type, pos, len, charCount, caretBefore, caretAfter }
+where type ∈ {insert, delete, caretJump, focus, blur}. Capture caret position on every event. Capture focus/blur so we can see tab-switching gaps. Keep payload size reasonable — coalesce consecutive single-char inserts within 200ms into one event with len and charCount.
+2. Create lib/processForensics.ts in api-server/src/lib/.
+Pure function analyzeProcess(keystrokes, finalContent) returning:
+{
+  processScore: 0..100,        // higher = more AI-like process
+  processClass: "human" | "mixed" | "likelyAI",
+  features: { ...numeric features below },
+  flags: string[]              // human-readable findings
+}
+Features to compute:
+
+burstUniformity: stdev of inter-keystroke intervals within typing bursts (a burst = run of inserts with no gap >2s). Low stdev across many bursts = transcription.
+pauseBeforeNewSentence: median pause (ms) before the first character after . , ? , ! . Genuine writing has long pauses here; transcription does not.
+pauseBeforeNewParagraph: same, for \n\n. Should be even longer for genuine composition.
+deletionRatio: total deleted chars / total inserted chars. Genuine writing ~0.15-0.40; transcription <0.05.
+structuralEditCount: number of deletions >50 chars OR deletions at a caret position >200 chars behind the current end-of-document. Transcribers almost never do these.
+caretBacktrackCount: caret jumps backward by >100 chars followed by edits. Genuine revision behavior.
+abandonedStartCount: sentences begun, deleted before completion, restarted. Count via sequences of insert→delete→insert at same position.
+burstLengthCV: coefficient of variation of burst lengths (chars per burst). Genuine writing is bursty and variable; transcription is uniform.
+frontToBackLinearity: fraction of inserts that occur at the current end-of-document vs. earlier positions. >0.95 is suspicious.
+totalActiveSeconds vs finalCharCount: implied chars/sec. Compare against per-student baseline (see step 4).
+
+Scoring: weighted combination, calibrated so a known-human profile lands <30 and a known-transcription profile lands >70. Start with equal weights; expose weights as constants at the top of the file so we can tune.
+3. Wire it into the submission pipeline.
+In routes/submissions.ts, alongside the existing runAICheck() GPTZero call, run analyzeProcess(keystrokes, content). Store on submissions:
+
+processScore: integer
+processClass: text
+processFeatures: jsonb
+processFlags: jsonb
+
+Add a Drizzle migration to lib/db/src/schema/submissions.ts.
+4. Build a per-student baseline.
+First two submissions per student establish a baseline {burstUniformity, deletionRatio, pauseBeforeNewSentence, ...} averaged across those sessions, stored on students as processBaseline: jsonb. From the third submission onward, processScore is computed both absolutely AND as a deviation from the student's own baseline. A student whose baseline is "writes in clean bursts with few deletions" doesn't get flagged for doing that consistently — they get flagged when this submission deviates from their baseline toward the AI-transcription profile.
+5. Live signal in the canvas (optional second pass).
+Add POST /canvas/:moduleId/processScore that runs analyzeProcess() on the current keystroke buffer and returns {processScore, processClass}. Throttle to once per 60s. In integrity-canvas.tsx, add a second traffic-light bar labeled "Writing Process" next to the existing "Text Analysis" bar. Same color logic (green/yellow/red) with the same fair-warning philosophy.
+6. Admin surface.
+In admin-submission-detail.tsx, add a "Writing Process Analysis" panel showing:
+
+processScore + processClass badge
+Each feature with the student's value, their baseline value, and the cohort median
+The flags array as bullet points
+Visualization: a timeline of burst-length over the session (bar chart), so the instructor can see uniform-transcription vs. variable-composition at a glance.
+
+Extend activityReport.ts to fold these flags into the existing report rather than duplicating.
+7. Diagnostic.
+Add a case to diagnostic.ts: synthetic "transcription" session (uniform 4-char bursts, 180ms intervals, zero deletions, linear front-to-back) should score >70. Synthetic "composition" session (variable bursts, 15% deletion ratio, two structural edits, long pauses before paragraphs) should score <30. Fail diagnostic if either threshold misses.
+8. Do not surface the feature list to students. The disclosure modal already covers monitoring in general terms. Adding "we measure your burst uniformity" tells sophisticated cheaters exactly what to spoof.

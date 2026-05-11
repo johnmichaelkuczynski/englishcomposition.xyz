@@ -10,6 +10,7 @@ import {
 import { anthropic } from "@workspace/integrations-anthropic-ai";
 import { modules, moduleById } from "../lib/curriculum";
 import { checkWithGPTZero } from "../lib/gptzero";
+import { analyzeProcess } from "../lib/processForensics";
 
 const router: IRouter = Router();
 
@@ -94,6 +95,151 @@ router.post("/diagnostic/run", async (req: Request, res: Response) => {
       const m = moduleById("d1");
       if (!m || m.number !== 1) throw new Error("moduleById('d1') failed");
     }),
+    // ---- Diachronic AI-detection: synthetic transcription -------------
+    // Perfectly uniform 4-char bursts at 180ms intervals with no
+    // deletions and pure end-appends should score >= 70 (likelyAI).
+    await run(
+      "ProcessForensics: synthetic transcription scores >= 70",
+      "system",
+      async () => {
+        const text =
+          "The Republic argues that justice is harmony among the parts of the soul. " +
+          "Plato distinguishes appetite, spirit, and reason. " +
+          "Each must perform its proper function for the soul to flourish. " +
+          "When reason rules, the person is just; when appetite rules, the person is unjust.";
+        const events: Array<Record<string, unknown>> = [];
+        let t = 0;
+        let caret = 0;
+        const tokens = text.match(/.{1,4}/g) ?? [];
+        for (const tok of tokens) {
+          events.push({
+            t,
+            type: "insert",
+            k: "i",
+            d: tok,
+            len: tok.length,
+            charCount: tok.length,
+            caretBefore: caret,
+            caretAfter: caret + tok.length,
+          });
+          caret += tok.length;
+          t += 180;
+        }
+        const r = analyzeProcess(events, text);
+        if (r.processScore < 70) {
+          throw new Error(
+            `expected >= 70 for synthetic transcription, got ${r.processScore} (class=${r.processClass})`,
+          );
+        }
+        return `score=${r.processScore} class=${r.processClass} flags=${r.flags.length}`;
+      },
+    ),
+    // ---- Diachronic AI-detection: synthetic composition ---------------
+    // Variable bursts, ~20% deletions, paragraph pauses, structural
+    // edits should score < 35 (human).
+    await run(
+      "ProcessForensics: synthetic composition scores < 35",
+      "system",
+      async () => {
+        const events: Array<Record<string, unknown>> = [];
+        let t = 1000;
+        let caret = 0;
+        let docLen = 0;
+        const insert = (s: string) => {
+          events.push({
+            t,
+            type: "insert",
+            k: "i",
+            d: s,
+            len: s.length,
+            charCount: s.length,
+            caretBefore: caret,
+            caretAfter: caret + s.length,
+          });
+          caret += s.length;
+          docLen += s.length;
+          // Variable inter-burst interval (deterministic for repeatability)
+          t += 400 + ((s.length * 37) % 800);
+        };
+        const del = (n: number) => {
+          events.push({
+            t,
+            type: "delete",
+            k: "d",
+            d: String(n),
+            len: n,
+            caretBefore: caret,
+            caretAfter: caret - n,
+          });
+          caret = Math.max(0, caret - n);
+          docLen = Math.max(0, docLen - n);
+          t += 300;
+        };
+        const longPause = (ms: number) => {
+          t += ms;
+        };
+        const caretJump = (newPos: number) => {
+          events.push({
+            t,
+            type: "caretJump",
+            k: "m",
+            caretBefore: caret,
+            caretAfter: newPos,
+          });
+          caret = newPos;
+          t += 200;
+        };
+
+        insert("Plato's Republic argues that justice is");
+        del(8);
+        insert("a kind of harmony in the soul.");
+        longPause(4500);
+        // Abandoned-and-restarted start: write 60 chars, delete 55, retry.
+        const restartCaret = caret;
+        insert(" The three parts of the soul must each fulfill their function");
+        longPause(1200);
+        del(55);
+        longPause(800);
+        insert(" The three parts—appetite, spirit, reason—must each");
+        del(5);
+        insert(" perform their proper function.");
+        longPause(800);
+        insert(" When reason rules, the soul is well-ordered.");
+        longPause(5200);
+        insert("\n\nThis view raises a question: what about pleasure?");
+        longPause(2000);
+        // Backward caret jump >100 chars + structural delete
+        caretJump(20);
+        del(80);
+        caretJump(docLen);
+        // Second caret backtrack pattern
+        caretJump(Math.max(0, docLen - 200));
+        insert(" (revised) ");
+        caretJump(docLen);
+        insert("\n\nAristotle responds in the Nicomachean Ethics:");
+        longPause(900);
+        insert(" virtue is a disposition, not a structural feature of the soul. ");
+        del(20);
+        insert("a habit cultivated through practice. ");
+        longPause(1500);
+        // Second structural edit
+        caretJump(Math.floor(docLen / 2));
+        del(60);
+        caretJump(docLen);
+        insert("This shifts the metaphor from architecture to gardening.");
+        // Reference restartCaret to avoid unused warning
+        if (restartCaret < 0) throw new Error("unreachable");
+
+        const finalText = "x".repeat(Math.max(docLen, 1));
+        const r = analyzeProcess(events, finalText);
+        if (r.processScore >= 35) {
+          throw new Error(
+            `expected < 35 for synthetic composition, got ${r.processScore} (class=${r.processClass})`,
+          );
+        }
+        return `score=${r.processScore} class=${r.processClass}`;
+      },
+    ),
   );
 
   // ----- 2. EXTERNAL API CHECKS -------------------------------------------

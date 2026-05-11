@@ -2,9 +2,21 @@
  * Compute the suspicious-activity report for a finished submission from
  * the captured keystroke + score-history streams.
  *
- * Event shapes (compact for storage):
- *   keystroke:  { t: ms_since_start, k: 'i' | 'd' | 'm' | 'p_blocked' | 'p_allowed', d?: string, p?: number }
- *   scoreSample:{ t: ms_since_start, score: number, cls: string }
+ * Event shapes (compact for storage). Both legacy and new shapes accepted:
+ *
+ *   Legacy:
+ *     keystroke:  { t: ms, k: 'i'|'d'|'m'|'p_blocked'|'p_allowed'|'h_off'|'h_on', d?: string, p?: number }
+ *
+ *   New (rich, with caret + length info):
+ *     keystroke:  { t: ms, type: 'insert'|'delete'|'caretJump'|'focus'|'blur',
+ *                   k?: string, d?: string, len?: number, charCount?: number,
+ *                   pos?: number, caretBefore?: number, caretAfter?: number }
+ *
+ *   scoreSample:  { t: ms, score: number, cls: string }
+ *
+ * The diachronic process-forensics flags from lib/processForensics.ts are
+ * folded INTO this report (rather than stored as a duplicate structure), so
+ * instructors see one unified report.
  */
 
 export interface ActivityReport {
@@ -26,13 +38,23 @@ export interface ActivityReport {
   highlightingOffWhileFlagged: boolean;
   /** Total typing duration in ms (first to last event). */
   totalDurationMs: number;
-  /** Total characters added (insert events). */
+  /** Total characters added (insert events; uses len when present). */
   totalInserts: number;
-  /** Total characters deleted. */
+  /** Total characters deleted (uses len when present). */
   totalDeletes: number;
+  /** Findings from diachronic writing-process forensics (folded in). */
+  processFlags: string[];
 }
 
-type Event = { t: number; k: string; d?: string; p?: number };
+type Event = {
+  t: number;
+  k?: string;
+  type?: string;
+  d?: string;
+  p?: number;
+  len?: number;
+  charCount?: number;
+};
 type Score = { t: number; score: number; cls?: string };
 
 function bucketOf(score: number): "green" | "yellow" | "red" {
@@ -41,9 +63,27 @@ function bucketOf(score: number): "green" | "yellow" | "red" {
   return "green";
 }
 
+function isInsert(e: Event): boolean {
+  return e.type === "insert" || e.k === "i";
+}
+function isDelete(e: Event): boolean {
+  return e.type === "delete" || e.k === "d";
+}
+function lenOf(e: Event): number {
+  if (typeof e.len === "number") return e.len;
+  if (typeof e.charCount === "number") return e.charCount;
+  if (isInsert(e) && typeof e.d === "string") return e.d.length;
+  if (isDelete(e) && typeof e.d === "string") {
+    const n = Number(e.d);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  }
+  return 1;
+}
+
 export function computeActivityReport(
   keystrokes: unknown,
   scoreHistory: unknown,
+  processFlags: string[] = [],
 ): ActivityReport {
   const ks: Event[] = Array.isArray(keystrokes)
     ? (keystrokes as Event[]).filter((e) => e && typeof e.t === "number")
@@ -72,16 +112,17 @@ export function computeActivityReport(
   }
 
   // --- WPM windows (30s, slide by 5s) over insert events ---
-  const inserts = ks.filter((e) => e.k === "i");
+  // Use chars (len) per insert, not events, since coalesced inserts can be multi-char.
+  const inserts = ks.filter(isInsert).map((e) => ({ t: e.t, n: lenOf(e) }));
   let peakWpm30s = 0;
   if (inserts.length > 1) {
     const maxT = inserts[inserts.length - 1].t;
     for (let start = 0; start <= maxT; start += 5_000) {
       const end = start + 30_000;
-      const charsInWindow = inserts.filter(
-        (e) => e.t >= start && e.t < end,
-      ).length;
-      const wpm = (charsInWindow / 5) / (30 / 60); // 5 chars≈1 word, scaled to per-min
+      const charsInWindow = inserts
+        .filter((e) => e.t >= start && e.t < end)
+        .reduce((a, b) => a + b.n, 0);
+      const wpm = (charsInWindow / 5) / (30 / 60); // 5 chars≈1 word
       if (wpm > peakWpm30s) peakWpm30s = wpm;
     }
   }
@@ -91,28 +132,22 @@ export function computeActivityReport(
   for (let i = 1; i < inserts.length; i++) {
     const gap = inserts[i].t - inserts[i - 1].t;
     if (gap >= 60_000) {
-      // Did a "burst" of fluent text follow? count chars in next 30s
       const burstStart = inserts[i].t;
-      const burstChars = inserts.filter(
-        (e) => e.t >= burstStart && e.t < burstStart + 30_000,
-      ).length;
+      const burstChars = inserts
+        .filter((e) => e.t >= burstStart && e.t < burstStart + 30_000)
+        .reduce((a, b) => a + b.n, 0);
       if (burstChars >= 200) pasteishBursts++;
     }
   }
 
   // --- Highlighting hidden while bar was yellow/red ---
-  // Walk h_off/h_on toggles and check whether any flagged score window
-  // overlapped with a "highlighting OFF" interval.
-  let highlightingOff = false;
   let highlightingHidWhileFlagged = false;
-  // Build a list of [startMs, endMs] intervals when highlighting was OFF.
   const offIntervals: Array<[number, number]> = [];
   let offStart: number | null = null;
   const finalT = ks.length > 0 ? ks[ks.length - 1].t : 0;
   for (const e of ks) {
     if (e.k === "h_off" && offStart === null) {
       offStart = e.t;
-      highlightingOff = true;
     } else if (e.k === "h_on" && offStart !== null) {
       offIntervals.push([offStart, e.t]);
       offStart = null;
@@ -135,11 +170,10 @@ export function computeActivityReport(
       }
     }
   }
-  void highlightingOff;
 
   const pastesBlocked = ks.filter((e) => e.k === "p_blocked").length;
-  const totalInserts = inserts.length;
-  const totalDeletes = ks.filter((e) => e.k === "d").length;
+  const totalInserts = inserts.reduce((a, b) => a + b.n, 0);
+  const totalDeletes = ks.filter(isDelete).reduce((a, e) => a + lenOf(e), 0);
   const totalDurationMs =
     ks.length > 0 ? Math.max(0, ks[ks.length - 1].t - ks[0].t) : 0;
 
@@ -155,5 +189,6 @@ export function computeActivityReport(
     totalDurationMs,
     totalInserts,
     totalDeletes,
+    processFlags,
   };
 }
